@@ -1,0 +1,32 @@
+races:
+  - race:
+      name: "Spring Classic 15k"
+      file: "SpringClassic2024Results5k.pdf"
+  - race:
+      name: "Med City Marathon"
+  - race:
+      name: "Chester Woods 10 Mile"
+  - race:
+      name: "Rochesterfest Mile"
+      file: "RochesterfestMileResultsOverall2024.v4.pdf"
+  - race:
+      name: "Stewartville 5 Mile"
+  - race:
+      name: "Byron GN 5k"
+  - race:
+      name: "Women's 4 Mile"
+      sex: "F"
+      file: "Rochester-Womens-4-Mile-Results-Overall-2024.pdf"
+  - race:
+      name: "Douglas Trail 11 Mile"
+  - race:
+      name: "Lance Pfrimmer 8k"
+  - race:
+      name: "HHR Half Marathon"
+  - race:
+      name: "Mayo Open 5k"
+      file: "Mayo-Open-XC-Race-2024-Overall-Results.pdf"
+  - race:
+      name: "Essex Trail 7k"
+      file: "TourDeEssexResultsOverall2024.pdf"
+

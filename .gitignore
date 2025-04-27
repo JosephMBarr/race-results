@@ -1,3 +1,4 @@
 *.json
 .env
+ingest/
 __pycache__/
