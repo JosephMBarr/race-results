@@ -1,5 +1,5 @@
 import yaml
-from parse import extract_results_from_pdf
+from parse import extract_results_from_pdf, print_division_rankings
 import os
 
 # Define a Race class to organize data neatly
@@ -41,7 +41,7 @@ def main():
     for race in races:
         if race.file is not None:
             results = extract_results_from_pdf(os.path.join(ingest_location, race.file))
-            print(results)
+            print_division_rankings(results)
 
 if __name__ == "__main__":
     main()

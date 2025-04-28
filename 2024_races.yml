@@ -1,7 +1,7 @@
 races:
   - race:
       name: "Spring Classic 15k"
-      file: "SpringClassic2024Results5k.pdf"
+      file: "SpringClassic2024Results15k.pdf"
   - race:
       name: "Med City Marathon"
   - race:
