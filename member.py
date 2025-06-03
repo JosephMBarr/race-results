@@ -2,17 +2,22 @@ import csv
 import re
 from datetime import datetime, date
 from difflib import SequenceMatcher
+from collections import defaultdict
+import calendar
+from fuzzyname import Name
+
 
 class Member:
     """
     Represents a club member with relevant membership details.
     """
-    def __init__(self, submission_date_str, first_name, last_name, birth_date_str,
+    def __init__(self, submission_date_str, name, birth_date_str,
                  gender, products_str):
         # Parse submission date
         self.submission_date = datetime.strptime(submission_date_str, '%m-%d-%Y %H:%M:%S')
-        self.first_name = first_name
-        self.last_name = last_name
+
+        # Hyphen might sneak in at the end
+        self.name = name.rstrip('-')
         # Parse birth date. Some people skip this or don't provide a year
         try:
             self.birth_date = datetime.strptime(birth_date_str, '%B %d %Y').date()
@@ -21,18 +26,16 @@ class Member:
         self.gender = gender
         self.products = products_str
 
-        # Determine start year: if submitted in Sept (9) or later, start next calendar year
+        # Determine start year: if submitted in Nov (11) or later, start next calendar year
         year = self.submission_date.year
-        if self.submission_date.month >= 9:
+        if self.submission_date.month >= 11:
             year += 1
         self.start_year = year
 
-        years_paid = 0
-        if "Renew 1 Year" in products_str:
-            years_paid += 1
+        product_phrases = ["Renew 1 Year", "New Individual", "New Family"]
 
-        if "New Individual" in products_str:
-            years_paid += 1
+        # Count the number of phrases in the product string. Each indicating a year paid.
+        years_paid = sum(1 for phrase in product_phrases if phrase in products_str)
 
 
         # Check for "Special Quantity: <number>" to extend membership
@@ -46,7 +49,7 @@ class Member:
         """
         Prints the member's details to the console.
         """
-        print(f"Member: {self.first_name} {self.last_name}")
+        print(f"Member: {self.name}")
         print(f"  Submission Date: {self.submission_date.date()}")
         print(f"  Birth Date: {self.birth_date}")
         print(f"  Gender: {self.gender}")
@@ -58,29 +61,122 @@ class Club:
     """
     Manages a collection of Member instances and provides lookup functionality.
     """
+    female_markers = ['f', 'female']
+    male_markers = ['m', 'male']
+    nonbinary_markers = ['n', 'nonbinary', 'nb']
+    gender_markers = female_markers + male_markers + nonbinary_markers
     def __init__(self):
         self.members = []
-    def load_from_csv(self, filepath, family=False):
+
+    def normalize_gender_marker(self, text):
+        gender = None
+        if text.lower() in self.male_markers:
+            gender = 'm'
+        if text.lower() in self.female_markers:
+            gender = 'f'
+        if text.lower() in self.nonbinary_markers:
+            gender = 'n'
+        return gender
+
+    def merge_members(self, other_members, tolerance=0.85):
+        """
+        Merges members from another list into self.members using fuzzy name matching and exact year match.
+        Updates missing gender and birth_date fields.
+        Raises ValueError if any member in other_members has no close match in self.members.
+        """
+        unmatched = []
+        for other in other_members:
+            best_match = None
+            other.display()
+            for self_m in self.members:
+                if Name(self_m.name) == Name(other.name):
+                    best_match = self_m
+                    break
+            if best_match:
+                if not best_match.gender and other.gender:
+                    best_match.gender = other.gender
+                if not best_match.birth_date and other.birth_date:
+                    best_match.birth_date = other.birth_date
+            else:
+                # Don't report if membership is lapsed
+                if other.end_year >= date.today().year:
+                    unmatched.append(other.name)
+        if len(unmatched) > 0:
+            raise Exception(f'Unmatched: {unmatched}')
+
+
+    def load_base_csv(self, filepath):
+        """
+        Reads a base CSV with columns: First name, Last name, Expires, and optional Birthdate.
+        Handles entries with multiple first/last names separated by '&' indicating multiple members.
+        """
+        current_year = date.today().year
+        with open(filepath, newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                raw_first = row['First name']
+                raw_last = row['Last name']
+                expires = row['Expires']
+                birthdate = row.get('Birthdate', '')
+
+                # Determine end year from Expires date
+                try:
+                    exp_date = datetime.strptime(expires, '%m/%d/%Y')
+                    end_year = exp_date.year
+                except ValueError:
+                    raise ValueError(f"Invalid Expires date format: {expires}")
+
+                # Normalize and split first and last names
+                split_delims = re.compile(r'\s*(?:&|,)\s*')
+                first_names = split_delims.split(raw_first)
+                last_names = split_delims.split(raw_last)
+                if len(last_names) == 1:
+                    last_names = last_names * len(first_names)
+                if len(first_names) != len(last_names):
+                    raise ValueError(f"Unmatched first and last names: {raw_first} / {raw_last}")
+
+                for fn, ln in zip(first_names, last_names):
+                    name = f"{fn} {ln}"
+                    m = Member(
+                        submission_date_str=f"01-01-{current_year} 00:00:00",
+                        name=name,
+                        birth_date_str=birthdate,
+                        gender='',
+                        products_str=''
+                    )
+                    m.start_year = current_year
+                    m.end_year = end_year
+                    self.members.append(m)
+                    m.display()
+
+
+
+    def load_from_csv(self, filepath, family=False, only_active=True):
         """
         Reads a CSV file (individual or family format), parses relevant columns,
         and stores Member instances. Use family=True for family files.
         """
+        loaded_members = []
+        current_year = date.today().year
         with open(filepath, newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
                 # Base fields
                 products_key = 'My Products: Products' if not family else 'Please select at least one:: Products'
                 base_products = row.get(products_key, '')
+                primary_name = f"{row['First Name']} {row['Last Name']}"
                 # Primary member
                 primary = Member(
                     submission_date_str=row['Submission Date'],
-                    first_name=row['First Name'],
-                    last_name=row['Last Name'],
+                    name=primary_name,
                     birth_date_str=row['Birth Date'],
                     gender=row['Gender'],
                     products_str=base_products
                 )
-                self.members.append(primary)
+                # Try and filter out null entries
+                if len(primary_name.strip()) > 0:
+                    if not only_active or (only_active and primary.end_year >= current_year):
+                        loaded_members.append(primary)
 
                 # If family signup, parse additional family members
                 if family:
@@ -94,23 +190,24 @@ class Club:
                         for member_info in re.split(r';|\|', val):  # split multiple in one field
                             parsed = self._parse_family_member(member_info, family_name)
                             if parsed:
-                                fn, ln, bd, gen = parsed
+                                name, bd, gen = parsed
                                 m = Member(
                                     submission_date_str=row['Submission Date'],
-                                    first_name=fn,
-                                    last_name=ln,
+                                    name=name,
                                     birth_date_str=bd,
                                     gender=gen,
                                     products_str=base_products
                                 )
-                                self.members.append(m)
+                                if not only_active or (only_active and primary.end_year >= current_year) and len(name.strip()) > 0:
+                                    loaded_members.append(m)
+        return loaded_members
     def _parse_family_member(self, s, family_name):
         """
         Attempts to extract first name, last name, birth date, and gender from a string.
         Expected separators: commas, slashes, or spaces.
         Formats supported for birth date: 'Month DD YYYY', 'MM-DD-YYYY', 'YYYY-MM-DD'.
 
-        Returns a tuple (first_name, last_name, birth_date_str, gender) or None.
+        Returns a tuple (name, birth_date_str, gender) or None.
         """
         #parts = re.split(r'[,/\\]+', s)
 
@@ -118,21 +215,15 @@ class Club:
         parts = [p.strip() for p in parts if p.strip()]
 
         # Easiest to determine is sex. Find it and take it out
-        sex = None
-        sex_index = -1
+        gender = None
+        gender_idx = -1
         for idx, p in enumerate(parts):
-            if p.lower() in ['m', 'male']:
-                sex = 'm'
-                sex_index = idx
-            if p.lower() in ['f', 'female']:
-                sex = 'f'
-                sex_index = idx
-            if p.lower() in ['n', 'nonbinary']:
-                sex = 'n'
-                sex_index = idx
+            if p.lower() in self.gender_markers:
+                gender_idx = idx
+                gender = self.normalize_gender_marker(p)
 
-        if sex is not None:
-            del parts[sex_index]
+        if gender is not None:
+            del parts[gender_idx]
 
         # Next easiest is date of birth. This is most reliably indicated by seeing two straight numbers.
         year = None
@@ -141,7 +232,14 @@ class Club:
         is_numeric = lambda s: s.isdigit()
         for idx, p in enumerate(parts):
             if is_numeric(p):
-                if is_numeric(parts[idx + 1]):
+                # If this is the first and only number, it must be the year. Assume birthday is January 1st
+                if idx == len(parts) - 1:
+                    year = parts[idx]
+                    month = '01'
+                    day = '01'
+                    break
+
+                elif is_numeric(parts[idx + 1]):
                     # Two straight numbers. Must be in a date
                     if len(parts) > idx + 2 and is_numeric(parts[idx + 2]):
                         # Third straight number, must be a year
@@ -154,31 +252,30 @@ class Club:
                         # Presumably of format %B %d %Y
                         month = parts[idx - 1]
                         day = parts[idx]
-                        
-                    parts.remove(year)
-                    parts.remove(month)
-                    parts.remove(day)
                     break
+                        
+        if year in parts:
+            parts.remove(year)
+        if month in parts:
+            parts.remove(month)
+        if day in parts:
+            parts.remove(day)
 
         # Clean up 
-        parts = [p for p in parts if p not in ['-', ':']]
+        parts = [p for p in parts if p not in ['-', ':', '&', 'DOB']]
         
         # In theory should just be name now
-        first_name = parts[0]
-        if len(parts) > 1:
-            last_name = parts[1]
-        else:
-            last_name = family_name
-
-        #last_name = ' '.join(name_parts[1:]) if len(name_parts) > 1 else ''
-        print(f'aaaa {first_name} {last_name}')
+        if len(parts) == 1:
+            # add family name
+            parts.append(family_name)
+        name = ' '.join(parts)
         if year is None or month is None or day is None:
             dob = None
             dob_str = ''
         else:
             dob = '/'.join([month, day, year])
             # Normalize DOB to 'Month DD YYYY'
-            for fmt in ('%B/%d/%Y', '%m/%d/%Y', '%d/%m/%Y'):
+            for fmt in ['%m/%d/%Y','%B/%d/%Y', '%d/%m/%Y']:
                 try:
                     dt = datetime.strptime(dob, fmt)
                     dob_str = dt.strftime('%B %d %Y')
@@ -187,7 +284,7 @@ class Club:
                     continue
             else:
                 dob_str = ''
-        return first_name, last_name, dob_str, sex
+        return name, dob_str, gender
     def display_all(self):
         """
         Displays all members in the club.
@@ -196,12 +293,13 @@ class Club:
             member.display()
 
 
-    def get_member(self, name, tolerance=0.8):
+    def get_member(self, name: str, year: int, tolerance=0.8):
         """
         Checks if a name (fuzzy matching) corresponds to an active member.
 
         Parameters:
             name (str): The full name to check, e.g., "Jane Doe".
+            year (int): The year for which to check activity of membership
             tolerance (float): Fuzzy match threshold between 0 and 1.
 
         Returns:
@@ -209,25 +307,32 @@ class Club:
         """
         today_year = date.today().year
         for member in self.members:
-            full_name = f"{member.first_name} {member.last_name}"
-            ratio = SequenceMatcher(None, name.lower(), full_name.lower()).ratio()
-            # If name matches and membership hasn't ended
-            if ratio >= tolerance and member.end_year >= today_year:
+            ratio = SequenceMatcher(None, name.lower(), member.name.lower()).ratio()
+            # If name matches and membership is active for year
+            if ratio >= tolerance and member.start_year <= year <= member.end_year:
                 return member
         return None
 
 if __name__ == '__main__':
     # Example usage:
     club = Club()
-    club.load_from_csv('/home/joseph/race-results/membership/family.csv', family=True)
+    club.load_base_csv('/home/joseph/race-results/membership/base.csv')
+    families = club.load_from_csv('/home/joseph/race-results/membership/family.csv', family=True, only_active=True)
+    individuals = club.load_from_csv('/home/joseph/race-results/membership/ind.csv', family=False, only_active=True)
+
+    individuals += families
+
+    club.merge_members(individuals)
+
+
     print("All Members:\n")
     club.display_all()
 
     # Check membership status for a name
-    #name_to_check = input("Enter full name to verify membership: ")
-    #member = club.get_member(name_to_check, tolerance=0.85)
-    #if member is not None:
-    #    print(f"{member.first_name} {member.last_name} is an active member until {member.end_year}.")
-    #else:
-    #    print(f"{name_to_check} is not an active member.")
+    name_to_check = input("Enter full name to verify membership: ")
+    member = club.get_member(name_to_check, tolerance=0.85)
+    if member is not None:
+        print(f"{member.name} is an active member until {member.end_year}.")
+    else:
+        print(f"{name_to_check} is not an active member.")
 

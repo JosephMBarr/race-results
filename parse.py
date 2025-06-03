@@ -6,7 +6,7 @@ from collections import defaultdict
 # Data structure for a race result entry
 class Result:
     def __init__(self, place, name, time, pace, age, sex, city, state):
-        self.place = place
+        self.place = int(place)
         self.name = name
         self.time = time
         self.pace = pace
@@ -14,8 +14,21 @@ class Result:
         self.sex = sex 
         self.city = city
         self.state = state
+        self.is_member = False
 
         self.set_division()
+
+    def set_membership(self, member, last_race_date):
+        if member is not None:
+            if member.birth_date is not None:
+                # Override age based on date of birth and last race date
+                age = last_race_date.year - member.birth_date.year
+                # Adjust if the race is before their birthday that year
+                if (last_race_date.month, last_race_date.day) < (member.birth_date.month, member.birth_date.day):
+                    age -= 1
+                self.age = age
+                self.set_division()
+            self.is_member = True
 
     def set_division(self):
         # Division spans a decade except for <19
@@ -198,6 +211,10 @@ def print_division_rankings(results: list[Result]):
         group.sort(key=lambda r: r.place)
 
         for i, runner in enumerate(group, 1):
-            print(f"{i}. {runner.name} — Time: {runner.time}, Age: {runner.age}, "
-                  f"City: {runner.city}, State: {runner.state}")
+            if runner.is_member:
+                point_value = 11 - i
+            else:
+                point_value = 0
+            print(f"{point_value}. {runner.name} — Time: {runner.time}, Age: {runner.age}, "
+                  f"City: {runner.city}, State: {runner.state}, {runner.place}")
 
