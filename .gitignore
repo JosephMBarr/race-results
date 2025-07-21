@@ -3,3 +3,7 @@
 ingest/
 __pycache__/
 membership/
+node_modules/
+*.yml
+*.zip
+*.log
