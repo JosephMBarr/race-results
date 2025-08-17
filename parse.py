@@ -23,6 +23,10 @@ class Result:
         self.is_member = False
         self.points = 0
         self.division = None
+        self.race_index = None
+
+    def set_race_index(self, race_index: int):
+        self.race_index = race_index
 
     def set_membership(self, member, race_date):
         if member is not None:
@@ -158,7 +162,7 @@ def extract_location_info(location_data):
 
     return city, state
 
-def extract_results(race, file_path, gender=None):
+def extract_results(race, race_index: int, file_path, gender=None):
     """
     Extract race results from a file, automatically detecting the file format.
 
@@ -190,6 +194,9 @@ def extract_results(race, file_path, gender=None):
         results = extract_results_from_csv(file_path, gender)
     else:
         raise Exception(f"Unsupported file format: {race.results_type} for file {file_path}")
+    for r in results:
+        r.set_race_index(race_index)
+
     return results
 
 def extract_results_from_raceresult(json_path: str, file_gender = None) -> list[Result]:
@@ -212,6 +219,52 @@ def extract_results_from_raceresult(json_path: str, file_gender = None) -> list[
     """
     results = []
 
+    def create_field_mapping(data_fields):
+        """Create a field mapping using exact field name matches."""
+
+        # Define expected field patterns with their possible variations
+        field_patterns = {
+            'place': ['WithStatus([AUTORANK.p])', 'WithStatus([OverallRank.p])', 'place', 'rank', 'position'],
+            'name': ['FLNAME', 'DisplayName', 'name', 'fullname', 'participant'],
+            'time': ['Finish.GUN', 'finish_time', 'gun_time', 'time', 'total_time'],
+            'pace': ['PACE', 'Finish.PACE', 'pace', 'avg_pace'],
+            'gender': ['GenderMF'],
+            'age': ['AGE', 'age', 'participant_age'],
+            'city': ['CITY', 'city', 'hometown'],
+            'state': ['STATE2', 'STATE', 'state', 'province']
+        }
+
+        mapping = {}
+
+        for field_type, patterns in field_patterns.items():
+            for pattern in patterns:
+                if pattern in data_fields:
+                    mapping[field_type] = data_fields.index(pattern)
+                    break
+
+        return mapping
+
+    def format_name(name_str):
+        """Format name from 'Last, First' to 'First Last' if comma is present."""
+        if not name_str or ',' not in name_str:
+            return name_str
+
+        parts = name_str.split(',', 1)
+        if len(parts) == 2:
+            last_name = parts[0].strip()
+            first_name = parts[1].strip()
+            return f"{first_name} {last_name}"
+
+        return name_str
+
+    def safe_extract_value(entry, field_mapping, field_type):
+        """Safely extract a value from entry using field mapping."""
+        if field_type in field_mapping:
+            idx = field_mapping[field_type]
+            if idx < len(entry) and entry[idx] and entry[idx] != '':
+                return entry[idx]
+        return None
+
     try:
         # Load JSON data from file
         with open(json_path, 'r') as file:
@@ -221,45 +274,37 @@ def extract_results_from_raceresult(json_path: str, file_gender = None) -> list[
         data_fields = json_data.get('DataFields', [])
         race_data = json_data.get('data', [])
 
-        # Create a mapping from field name to index
-        field_mapping = {field: idx for idx, field in enumerate(data_fields)}
+        # Create field mapping
+        field_mapping = create_field_mapping(data_fields)
 
         # Process each racer entry
         for entry in race_data:
             try:
-                # Extract data using the field mapping
-                # Place - remove the period from "1.", "2.", etc.
-                place_raw = entry[field_mapping['WithStatus([AUTORANK.p])']]
-                place = int(place_raw.rstrip('.')) if place_raw and place_raw != '' else 0
+                # Extract data using field mapping
+                place_raw = safe_extract_value(entry, field_mapping, 'place')
+                place = int(place_raw.rstrip('.')) if place_raw else 0
 
-                # Name
-                name = entry[field_mapping['FLNAME']] or 'Unknown'
+                name_raw = safe_extract_value(entry, field_mapping, 'name') or 'Unknown'
+                name = format_name(name_raw)
 
-                # Time
-                time = entry[field_mapping['Finish.GUN']] or '0:00'
+                time = safe_extract_value(entry, field_mapping, 'time') or '0:00'
+                pace = safe_extract_value(entry, field_mapping, 'pace') or '0:00'
 
-                # Pace
-                pace = entry[field_mapping['PACE']] or '0:00'
+                age_raw = safe_extract_value(entry, field_mapping, 'age')
+                age = int(age_raw) if age_raw else None
 
-                # Age - handle empty strings
-                age_raw = entry[field_mapping['AGE']]
-                age = int(age_raw) if age_raw and age_raw != '' else None
+                gender_extract = safe_extract_value(entry, field_mapping, 'gender')
+                gender = gender_extract if gender_extract else file_gender
 
-                # gender - not available in raceresult data
-                gender = file_gender
+                age_raw = safe_extract_value(entry, field_mapping, 'age')
+                city = safe_extract_value(entry, field_mapping, 'city') or ''
+                state = safe_extract_value(entry, field_mapping, 'state') or ''
 
-                # City and State
-                city = entry[field_mapping['CITY']] or ''
-                state = entry[field_mapping['STATE2']] or ''
-
-                # Create Result object
                 result = Result(place, name, time, pace, age, gender, city, state)
                 results.append(result)
 
-            except (KeyError, ValueError, TypeError, IndexError) as e:
-                # Log error and continue processing other entries
+            except (ValueError, TypeError, IndexError) as e:
                 print(f"Warning: Skipping racer entry due to error: {e}")
-                print(f"Problematic entry: {entry}")
                 continue
 
     except FileNotFoundError:
@@ -394,8 +439,19 @@ def extract_results_from_csv(csv_path: str, file_gender=None) -> list[Result]:
             in_results_section = False
             overall_place = 1  # Track overall place across both gender sections
 
-            for row_num, row in enumerate(csv_reader, 1):
+            time_idx = -1
+            name_idx = -1
+            age_idx = -1
+            gender_idx = -1
+
+
+            for row_num, row in enumerate(csv_reader):
                 try:
+                    if 'Place' in row and 'Time' in row:
+                        time_idx = row.index('Time')
+                        name_idx = row.index('Name')
+                        age_idx = row.index('Age')
+                        gender_idx = row.index('Gender')
                     # Skip empty rows
                     if not row or all(cell.strip() == '' for cell in row):
                         continue
@@ -403,6 +459,7 @@ def extract_results_from_csv(csv_path: str, file_gender=None) -> list[Result]:
                     # Check for section headers
                     first_cell = row[0].strip().lower() if row[0] else ''
 
+                    print(first_cell)
                     # Start processing when we hit "All females" or "All males"
                     if first_cell in ['all females', 'all males']:
                         in_results_section = True
@@ -423,10 +480,6 @@ def extract_results_from_csv(csv_path: str, file_gender=None) -> list[Result]:
 
                     # Determine column structure - place can be in column 0 or 1
                     place_col = 0
-                    time_col = 2
-                    name_col = 3
-                    age_col = 4
-                    gender_col = 5
 
                     # Check if place is in column 1 instead (when column 0 is empty)
                     if row[0].strip() == '' and len(row) > 1 and row[1].strip().isdigit():
@@ -443,10 +496,11 @@ def extract_results_from_csv(csv_path: str, file_gender=None) -> list[Result]:
                     place = int(place_str)
 
                     # Extract other fields
-                    time = row[time_col].strip() if len(row) > time_col else ''
-                    name = row[name_col].strip() if len(row) > name_col else 'Unknown'
-                    age_str = row[age_col].strip() if len(row) > age_col else ''
-                    gender_str = row[gender_col].strip().lower() if len(row) > gender_col else ''
+                    time = row[time_idx].strip() if len(row) > time_idx else ''
+                    name = row[name_idx].strip() if len(row) > name_idx else 'Unknown'
+                    age_str = row[age_idx].strip() if len(row) > age_idx else ''
+                    gender_str = row[gender_idx].strip().lower() if len(row) > gender_idx else ''
+                    print(gender_str)
 
                     # Validate required fields
                     if not time or not name:
@@ -593,8 +647,6 @@ def extract_results_from_pdf(pdf_path: str, file_gender) -> list[Result]:
 
 
         if time is None or name is None or age is None or gender is None:
-            for c in columns:
-                print(c.name)
             raise Exception(f"Failed to extract data from {row} in file {pdf_path}")
         # Build result object
         results.append(Result(place, name, time, pace, age, gender, city, state))

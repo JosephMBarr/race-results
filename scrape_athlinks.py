@@ -3,7 +3,7 @@ import json
 from math import ceil
 
 def fetch_all_race_results():
-    base_url = "https://reignite-api.athlinks.com/event/1108956/race/2590981/results"
+    base_url = "https://reignite-api.athlinks.com/event/1119291/race/2628163/results"
     limit = 100
     all_results = []
 
@@ -37,7 +37,7 @@ def fetch_all_race_results():
         print(f"Fetched batch {i+1}/{total_requests} (from={from_param})")
 
     # Write combined results to file
-    with open("2025_medcity.json", "w") as f:
+    with open("2025_reggie_oeltjen.json", "w") as f:
         json.dump(all_results, f, indent=2)
 
     print(f"Total results collected: {len(all_results)}")

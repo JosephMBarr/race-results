@@ -54,7 +54,7 @@ def process_gp_points(results: list[Result], club: Club, race: Race):
 
     # Establish whether each result corresponds to a member
     for r in results:
-        member = club.get_member(r.name, threshold=85)
+        member = club.get_member(r.age, r.name, race.date, threshold=85)
         r.set_membership(member, race.date)
         r.set_division()
 
@@ -71,8 +71,9 @@ def process_gp_points(results: list[Result], club: Club, race: Race):
             if runner.is_member:
                 runner.points = max(0, 11 - i)
                 runner.division = division
-                member = club.get_member(runner.name, threshold=85)
+                member = club.get_member(runner.age, runner.name, race.date, threshold=85)
                 member.add_result(runner)
+
 
 
 def main():
@@ -84,22 +85,24 @@ def main():
     club.load_members()
     
     # Print out the name and file fields
-    for race in races:
+    for race_index, race in enumerate(races):
         results = []
         if race.gender_files:
             male_path = os.path.join(ingest_location, race.male_file)
             female_path = os.path.join(ingest_location, race.female_file)
-            male_results = extract_results(race, male_path, gender='Male')
-            female_results = extract_results(race, female_path, gender='Female')
+            male_results = extract_results(race, race_index, male_path, gender='Male')
+            female_results = extract_results(race, race_index, female_path, gender='Female')
             results = male_results + female_results
 
         elif race.file is not None:
             file_path = os.path.join(ingest_location, race.file)
-            results = extract_results(race, file_path)
+            results = extract_results(race, race_index, file_path)
 
         process_gp_points(results, club, race)
     
-    club.print_gp_results()
+    #club.print_gp_results()
+    #club.export_gp_results_to_csv(races, 'gp_results_2025.csv')
+    club.generate_gp_results_pdf(races, 'gp_results_2025.pdf')
 
 
 
